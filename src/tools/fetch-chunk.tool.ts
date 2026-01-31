@@ -5,7 +5,7 @@ import { formatChangeModeResponse, summarizeChangeModeEdits } from '../utils/cha
 import { Logger } from '../utils/logger.js';
 
 const inputSchema = z.object({
-  cacheKey: z.string().describe("The cache key provided in the initial changeMode response"),
+  cacheKey: z.string().regex(/^[a-f0-9]{8}$/i).describe("The cache key provided in the initial changeMode response"),
   chunkIndex: z.number().min(1).describe("Which chunk to retrieve (1-based index)")
 });
 

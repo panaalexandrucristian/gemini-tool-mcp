@@ -1,4 +1,4 @@
-import { createHash } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
 import { EditChunk } from './changeModeChunker.js';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -14,11 +14,26 @@ interface CacheEntry {
 const CACHE_DIR = path.join(os.tmpdir(), 'gemini-mcp-chunks');
 const CACHE_TTL = 10 * 60 * 1000;
 const MAX_CACHE_FILES = 50;
+const CACHE_KEY_PATTERN = /^[a-f0-9]{8}$/i;
 
 function ensureCacheDir(): void {
   if (!fs.existsSync(CACHE_DIR)) {
-    fs.mkdirSync(CACHE_DIR, { recursive: true });
+    fs.mkdirSync(CACHE_DIR, { recursive: true, mode: 0o700 });
   }
+  // Best-effort permission hardening (mode ignored on some platforms).
+  try {
+    fs.chmodSync(CACHE_DIR, 0o700);
+  } catch {
+    // ignore
+  }
+}
+
+function resolveCachePath(cacheKey: string): string | null {
+  if (!CACHE_KEY_PATTERN.test(cacheKey)) return null;
+  const base = path.resolve(CACHE_DIR);
+  const resolved = path.resolve(CACHE_DIR, `${cacheKey}.json`);
+  if (!resolved.startsWith(base + path.sep)) return null;
+  return resolved;
 }
 
 /**
@@ -31,10 +46,25 @@ export function cacheChunks(prompt: string, chunks: EditChunk[]): string {
   ensureCacheDir();
   cleanExpiredFiles(); // Cleanup on each write
   
-  // Generate deterministic cache key from prompt
+  // Generate deterministic prompt hash for metadata/debugging
   const promptHash = createHash('sha256').update(prompt).digest('hex');
-  const cacheKey = promptHash.slice(0, 8);
-  const filePath = path.join(CACHE_DIR, `${cacheKey}.json`);
+  
+  // Use a random short key to avoid predictable keys and collisions.
+  let cacheKey = randomBytes(4).toString('hex');
+  let filePath = resolveCachePath(cacheKey);
+  for (let i = 0; i < 5 && filePath && fs.existsSync(filePath); i++) {
+    cacheKey = randomBytes(4).toString('hex');
+    filePath = resolveCachePath(cacheKey);
+  }
+  if (!filePath) {
+    // Extremely unlikely unless platform issues; fall back to prompt hash prefix.
+    cacheKey = promptHash.slice(0, 8);
+    filePath = resolveCachePath(cacheKey);
+  }
+  if (!filePath) {
+    Logger.error(`Failed to generate a safe cache key/path`);
+    return promptHash.slice(0, 8);
+  }
   
   // Store with metadata
   const cacheData: CacheEntry = {
@@ -44,7 +74,7 @@ export function cacheChunks(prompt: string, chunks: EditChunk[]): string {
   };
   
   try {
-    fs.writeFileSync(filePath, JSON.stringify(cacheData));
+    fs.writeFileSync(filePath, JSON.stringify(cacheData), { mode: 0o600 });
     Logger.debug(`Cached ${chunks.length} chunks to file: ${cacheKey}.json`);
   } catch (error) {
     Logger.error(`Failed to cache chunks: ${error}`);
@@ -59,7 +89,11 @@ export function cacheChunks(prompt: string, chunks: EditChunk[]): string {
  * @returns The cached chunks or null if expired/not found
  */
 export function getChunks(cacheKey: string): EditChunk[] | null {
-  const filePath = path.join(CACHE_DIR, `${cacheKey}.json`);
+  const filePath = resolveCachePath(cacheKey);
+  if (!filePath) {
+    Logger.debug(`Invalid cache key format: ${cacheKey}`);
+    return null;
+  }
   
   try {
     if (!fs.existsSync(filePath)) {

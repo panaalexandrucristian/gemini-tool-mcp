@@ -12,7 +12,7 @@ const askGeminiArgsSchema = z.object({
   sandbox: z.boolean().default(false).describe("Use sandbox mode (-s flag) to safely test code changes, execute scripts, or run potentially risky operations in an isolated environment"),
   changeMode: z.boolean().default(false).describe("Enable structured change mode - formats prompts to prevent tool errors and returns structured edit suggestions that Claude can apply directly"),
   chunkIndex: z.union([z.number(), z.string()]).optional().describe("Which chunk to return (1-based)"),
-  chunkCacheKey: z.string().optional().describe("Optional cache key for continuation"),
+  chunkCacheKey: z.string().regex(/^[a-f0-9]{8}$/i).optional().describe("Optional cache key for continuation"),
 });
 
 export const askGeminiTool: UnifiedTool = {

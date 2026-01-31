@@ -12,6 +12,33 @@ import { formatChangeModeResponse, summarizeChangeModeEdits } from './changeMode
 import { chunkChangeModeEdits } from './changeModeChunker.js';
 import { cacheChunks, getChunks } from './chunkCache.js';
 
+function validateAtFileReferences(prompt: string): void {
+  if (process.env.GEMINI_MCP_ALLOW_ANY_PATHS === '1') return;
+
+  const atRefPattern = /(^|\s)@([^\s"'`]+)/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = atRefPattern.exec(prompt)) !== null) {
+    const rawRef = match[2] || '';
+    if (!rawRef) continue;
+
+    // Allow common non-path mentions like "@someone" (no slashes/backslashes).
+    const looksLikePath = rawRef.includes('/') || rawRef.includes('\\') || rawRef.includes('.') || rawRef.includes(':');
+    if (!looksLikePath) continue;
+
+    const isAbsolutePosix = rawRef.startsWith('/');
+    const isAbsoluteWindows = rawRef.startsWith('\\') || /^[a-zA-Z]:\\/.test(rawRef);
+    const isHomePath = rawRef.startsWith('~');
+    const hasTraversal = rawRef.split(/[\\/]/).includes('..');
+
+    if (isAbsolutePosix || isAbsoluteWindows || isHomePath || hasTraversal) {
+      throw new Error(
+        `Blocked unsafe @ path reference: "@${rawRef}". Use workspace-relative paths (e.g. "@src/index.ts") or set GEMINI_MCP_ALLOW_ANY_PATHS=1 to disable this check.`
+      );
+    }
+  }
+}
+
 export async function executeGeminiCLI(
   prompt: string,
   model?: string,
@@ -96,6 +123,7 @@ ${prompt_processed}
     ? `"${prompt_processed}"` 
     : prompt_processed;
     
+  validateAtFileReferences(prompt_processed);
   args.push(CLI.FLAGS.PROMPT, finalPrompt);
   
   try {
